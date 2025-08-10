@@ -1,18 +1,21 @@
 const { v4: uuidv4 } = require('uuid');
-const redisClient = require('../config/redis');
-const config = require('../config');
 
 const QUEUE_KEY = 'waiting:queue';
 const ACTIVE_USERS_KEY = 'active:users';
 const USER_DATA_PREFIX = 'user:data:';
 
 class QueueService {
+  constructor(redisClient, config) {
+    this.redisClient = redisClient;
+    this.config = config;
+  }
+
   async addToQueue(userId, userData) {
     const timestamp = Date.now();
     const queueToken = uuidv4();
     
     // Store user data
-    await redisClient.hSet(`${USER_DATA_PREFIX}${userId}`, 
+    await this.redisClient.hSet(`${USER_DATA_PREFIX}${userId}`, 
       'userId', userId,
       'queueToken', queueToken,
       'joinedAt', timestamp.toString(),
@@ -21,10 +24,10 @@ class QueueService {
     );
     
     // Set expiration for user data
-    await redisClient.expire(`${USER_DATA_PREFIX}${userId}`, config.queue.timeoutMinutes * 60);
+    await this.redisClient.expire(`${USER_DATA_PREFIX}${userId}`, this.config.queue.timeoutMinutes * 60);
     
     // Add to queue (sorted set with timestamp as score)
-    await redisClient.zAdd(QUEUE_KEY, {
+    await this.redisClient.zAdd(QUEUE_KEY, {
       score: timestamp,
       value: userId
     });
@@ -41,7 +44,7 @@ class QueueService {
   }
 
   async getQueuePosition(userId) {
-    const rank = await redisClient.zRank(QUEUE_KEY, userId);
+    const rank = await this.redisClient.zRank(QUEUE_KEY, userId);
     return rank !== null ? rank + 1 : null;
   }
 
@@ -49,15 +52,15 @@ class QueueService {
     const position = await this.getQueuePosition(userId);
     if (position === null) {
       // Check if user is already active
-      const isActive = await redisClient.sIsMember(ACTIVE_USERS_KEY, userId);
+      const isActive = await this.redisClient.sIsMember(ACTIVE_USERS_KEY, userId);
       if (isActive) {
         return { status: 'active', canAccess: true };
       }
       return { status: 'not_in_queue', canAccess: false };
     }
 
-    const totalInQueue = await redisClient.zCard(QUEUE_KEY);
-    const activeUsers = await redisClient.sCard(ACTIVE_USERS_KEY);
+    const totalInQueue = await this.redisClient.zCard(QUEUE_KEY);
+    const activeUsers = await this.redisClient.sCard(ACTIVE_USERS_KEY);
     
     return {
       status: 'waiting',
@@ -70,24 +73,24 @@ class QueueService {
   }
 
   async processQueue() {
-    const activeUsers = await redisClient.sCard(ACTIVE_USERS_KEY);
-    const availableSlots = config.queue.maxConcurrentUsers - activeUsers;
+    const activeUsers = await this.redisClient.sCard(ACTIVE_USERS_KEY);
+    const availableSlots = this.config.queue.maxConcurrentUsers - activeUsers;
     
     if (availableSlots <= 0) return [];
     
     // Get users from front of queue
-    const nextUsers = await redisClient.zRange(QUEUE_KEY, 0, availableSlots - 1);
+    const nextUsers = await this.redisClient.zRange(QUEUE_KEY, 0, availableSlots - 1);
     const processedUsers = [];
     
     for (const userId of nextUsers) {
       // Remove from queue
-      await redisClient.zRem(QUEUE_KEY, userId);
+      await this.redisClient.zRem(QUEUE_KEY, userId);
       
       // Add to active users
-      await redisClient.sAdd(ACTIVE_USERS_KEY, userId);
+      await this.redisClient.sAdd(ACTIVE_USERS_KEY, userId);
       
       // Set expiration for active status
-      await redisClient.expire(`active:${userId}`, config.queue.timeoutMinutes * 60);
+      await this.redisClient.expire(`active:${userId}`, this.config.queue.timeoutMinutes * 60);
       
       processedUsers.push(userId);
     }
@@ -96,19 +99,19 @@ class QueueService {
   }
 
   async removeFromActive(userId) {
-    await redisClient.sRem(ACTIVE_USERS_KEY, userId);
-    await redisClient.del(`${USER_DATA_PREFIX}${userId}`);
+    await this.redisClient.sRem(ACTIVE_USERS_KEY, userId);
+    await this.redisClient.del(`${USER_DATA_PREFIX}${userId}`);
   }
 
   async removeFromQueue(userId) {
     // Remove from waiting queue
-    const removed = await redisClient.zRem(QUEUE_KEY, userId);
+    const removed = await this.redisClient.zRem(QUEUE_KEY, userId);
     
     // Remove user data
-    await redisClient.del(`${USER_DATA_PREFIX}${userId}`);
+    await this.redisClient.del(`${USER_DATA_PREFIX}${userId}`);
     
     // Also check if user is in active users and remove
-    await redisClient.sRem(ACTIVE_USERS_KEY, userId);
+    await this.redisClient.sRem(ACTIVE_USERS_KEY, userId);
     
     return {
       removed: removed > 0,
@@ -117,15 +120,15 @@ class QueueService {
   }
 
   async getQueueInfo() {
-    const queueLength = await redisClient.zCard(QUEUE_KEY);
-    const activeUsers = await redisClient.sCard(ACTIVE_USERS_KEY);
-    const queueMembers = await redisClient.zRangeWithScores(QUEUE_KEY, 0, 9);
+    const queueLength = await this.redisClient.zCard(QUEUE_KEY);
+    const activeUsers = await this.redisClient.sCard(ACTIVE_USERS_KEY);
+    const queueMembers = await this.redisClient.zRangeWithScores(QUEUE_KEY, 0, 9);
     
     return {
       queueLength,
       activeUsers,
-      maxConcurrentUsers: config.queue.maxConcurrentUsers,
-      availableSlots: config.queue.maxConcurrentUsers - activeUsers,
+      maxConcurrentUsers: this.config.queue.maxConcurrentUsers,
+      availableSlots: this.config.queue.maxConcurrentUsers - activeUsers,
       nextInQueue: queueMembers.map((member, index) => ({
         userId: member.value,
         position: index + 1,
@@ -136,13 +139,13 @@ class QueueService {
   }
 
   async clearQueue() {
-    await redisClient.del(QUEUE_KEY);
-    await redisClient.del(ACTIVE_USERS_KEY);
+    await this.redisClient.del(QUEUE_KEY);
+    await this.redisClient.del(ACTIVE_USERS_KEY);
     
     // Clear all user data
-    const keys = await redisClient.keys(`${USER_DATA_PREFIX}*`);
+    const keys = await this.redisClient.keys(`${USER_DATA_PREFIX}*`);
     if (keys.length > 0) {
-      await redisClient.del(keys);
+      await this.redisClient.del(keys);
     }
     
     return { message: 'Queue cleared successfully' };
@@ -152,8 +155,8 @@ class QueueService {
     if (!position) return 0;
     
     // Calculate based on average service time and concurrent users
-    const batchPosition = Math.ceil(position / config.queue.maxConcurrentUsers);
-    const estimatedSeconds = batchPosition * config.queue.estimatedServiceTimeSeconds;
+    const batchPosition = Math.ceil(position / this.config.queue.maxConcurrentUsers);
+    const estimatedSeconds = batchPosition * this.config.queue.estimatedServiceTimeSeconds;
     
     return {
       seconds: estimatedSeconds,
@@ -172,4 +175,4 @@ class QueueService {
   }
 }
 
-module.exports = new QueueService();
+module.exports = QueueService;

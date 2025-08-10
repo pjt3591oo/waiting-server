@@ -8,11 +8,15 @@ require('dotenv').config();
 
 const config = require('./config');
 const redisClient = require('./config/redis');
-const routes = require('./routes');
+const createRoutes = require('./routes');
 const errorHandler = require('./middleware/errorHandler');
 const QueueProcessor = require('./utils/queueProcessor');
-const queueService = require('./services/queueService');
-const tokenService = require('./services/tokenService');
+const QueueService = require('./services/queueService');
+const TokenService = require('./services/tokenService');
+
+// Create service instances
+const queueService = new QueueService(redisClient, config);
+const tokenService = new TokenService(config);
 
 const app = express();
 const httpServer = createServer(app);
@@ -22,8 +26,8 @@ const io = new Server(httpServer, {
   }
 });
 
-// Initialize queue processor
-const queueProcessor = new QueueProcessor(io);
+// Initialize queue processor with services
+const queueProcessor = new QueueProcessor(io, queueService, tokenService);
 
 // Middleware
 app.use(helmet({
@@ -54,7 +58,13 @@ app.get('/health', (req, res) => {
   res.json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
+// Pass services to app for routes to access
+app.set('queueService', queueService);
+app.set('tokenService', tokenService);
+app.set('queueProcessor', queueProcessor);
+
 // Routes
+const routes = createRoutes(app);
 app.use('/api', routes);
 
 // Error handling

@@ -1,9 +1,8 @@
-const queueService = require('../services/queueService');
-const tokenService = require('../services/tokenService');
-
 class QueueProcessor {
-  constructor(io) {
+  constructor(io, queueService, tokenService) {
     this.io = io;
+    this.queueService = queueService;
+    this.tokenService = tokenService;
     this.processingInterval = null;
   }
 
@@ -29,14 +28,14 @@ class QueueProcessor {
   }
 
   async processQueue() {
-    const processedUsers = await queueService.processQueue();
+    const processedUsers = await this.queueService.processQueue();
     
     if (processedUsers.length > 0) {
       console.log(`Processing ${processedUsers.length} users from queue`);
       
       // Notify processed users
       for (const userId of processedUsers) {
-        const accessToken = tokenService.generateAccessToken(userId);
+        const accessToken = this.tokenService.generateAccessToken(userId);
         
         // Send notification via WebSocket
         this.io.to(`user-${userId}`).emit('queue-ready', {
@@ -53,7 +52,7 @@ class QueueProcessor {
   }
 
   async updateQueuePositions() {
-    const queueInfo = await queueService.getQueueInfo();
+    const queueInfo = await this.queueService.getQueueInfo();
     
     // Notify each user in queue about their updated position
     for (const user of queueInfo.nextInQueue) {

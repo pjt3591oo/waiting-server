@@ -1,7 +1,10 @@
 const jwt = require('jsonwebtoken');
-const config = require('../config');
 
 class TokenService {
+  constructor(config) {
+    this.config = config;
+  }
+
   generateAccessToken(userId) {
     const payload = {
       userId,
@@ -9,8 +12,8 @@ class TokenService {
       issuedAt: Date.now()
     };
     
-    return jwt.sign(payload, config.jwt.secret, {
-      expiresIn: config.jwt.expiresIn
+    return jwt.sign(payload, this.config.jwt.secret, {
+      expiresIn: this.config.jwt.expiresIn
     });
   }
 
@@ -21,14 +24,14 @@ class TokenService {
       issuedAt: Date.now()
     };
     
-    return jwt.sign(payload, config.jwt.secret, {
-      expiresIn: `${config.queue.timeoutMinutes}m`
+    return jwt.sign(payload, this.config.jwt.secret, {
+      expiresIn: `${this.config.queue.timeoutMinutes}m`
     });
   }
 
   verifyToken(token) {
     try {
-      const decoded = jwt.verify(token, config.jwt.secret);
+      const decoded = jwt.verify(token, this.config.jwt.secret);
       return {
         valid: true,
         payload: decoded
@@ -46,4 +49,4 @@ class TokenService {
   }
 }
 
-module.exports = new TokenService();
+module.exports = TokenService;
