@@ -17,6 +17,8 @@
 - **Real-time**: Socket.io
 - **Authentication**: JWT
 - **Container**: Docker + docker-compose
+- **Testing**: Vitest + Testcontainers
+- **Code Quality**: ESLint + Prettier
 
 ## 시작하기
 
@@ -54,6 +56,42 @@ npm run dev
 
 브라우저에서 `http://localhost:3000` 접속하여 대기열 시스템을 테스트할 수 있습니다.
 
+## 테스트
+
+### 테스트 실행
+
+```bash
+# 모든 테스트 실행
+npm test
+
+# 테스트 UI 모드로 실행
+npm run test:ui
+
+# 테스트 커버리지 확인
+npm run test:coverage
+
+# 특정 테스트 파일만 실행
+npm test queue.controller.test.js
+```
+
+### 테스트 구조
+
+- **통합 테스트**: Controller와 실제 Redis를 사용한 전체 흐름 검증
+- **Testcontainers**: 실제 Redis 컨테이너를 사용하여 실제 환경과 동일한 테스트
+
+### 의존성 주입 패턴
+
+프로젝트는 테스트 가능성을 높이기 위해 의존성 주입 패턴을 사용합니다:
+
+```javascript
+// Service 생성 시 의존성 주입
+const queueService = new QueueService(redisClient, config);
+const tokenService = new TokenService(config);
+
+// Controller 생성 시 서비스 주입
+const queueController = new QueueController(queueService, tokenService, queueProcessor);
+```
+
 ## API 엔드포인트
 
 ### 1. 대기열 참가
@@ -68,19 +106,34 @@ Content-Type: application/json
 }
 ```
 
-**응답**:
+**응답 (대기 중)**:
 ```json
 {
   "success": true,
   "data": {
-    "userId": "user123",
-    "queueToken": "uuid",
+    "status": "waiting",
     "position": 5,
+    "totalInQueue": 10,
+    "activeUsers": 2,
     "estimatedWaitTime": {
       "seconds": 180,
       "minutes": 3,
       "formatted": "3 minutes"
-    }
+    },
+    "canAccess": false
+  }
+}
+```
+
+**응답 (즉시 활성화)**:
+```json
+{
+  "success": true,
+  "data": {
+    "status": "active",
+    "canAccess": true,
+    "activeUsers": 1,
+    "accessToken": "eyJhbGciOiJIUzI1NiIs..."
   }
 }
 ```
@@ -120,7 +173,23 @@ Authorization: Bearer <access-token>
 GET /api/queue/info
 ```
 
-### 5. 대기열 초기화 (관리용)
+### 5. 대기열 나가기
+```http
+DELETE /api/queue/leave/:userId
+```
+
+**응답**:
+```json
+{
+  "success": true,
+  "data": {
+    "removed": true,
+    "message": "Successfully left the queue"
+  }
+}
+```
+
+### 6. 대기열 초기화 (관리용)
 ```http
 POST /api/queue/clear
 ```
@@ -136,6 +205,7 @@ POST /api/queue/clear
 - `queue-joined`: 대기열 참가 완료
 - `queue-update`: 대기 순번 업데이트
 - `queue-ready`: 서비스 이용 가능 알림 (access token 포함)
+- `queue-left`: 대기열 나가기 완료
 - `queue-cleared`: 대기열 초기화 알림
 
 ## 환경 변수
@@ -162,10 +232,14 @@ waiting-server/
 │   ├── services/       # 비즈니스 로직
 │   ├── utils/          # 유틸리티
 │   └── index.js        # 진입점
+├── tests/
+│   ├── controller/     # 컨트롤러 통합 테스트
+│   └── helpers/        # 테스트 헬퍼 (Redis 컨테이너)
 ├── public/             # 정적 파일 (테스트 페이지)
 ├── docker-compose.yml  # Docker 설정
 ├── Dockerfile          # Docker 이미지
 ├── package.json        # 의존성
+├── vitest.config.mjs   # Vitest 설정
 └── README.md           # 문서
 ```
 
@@ -176,6 +250,7 @@ waiting-server/
 3. **모니터링**: 대기열 길이와 처리 속도 모니터링 필요
 4. **스케일링**: 여러 인스턴스 운영 시 Redis Pub/Sub 활용 고려
 5. **타임아웃**: 사용자가 서비스를 떠났을 때 자동으로 active 상태 해제
+6. **즉시 활성화**: 빈 슬롯이 있을 때 새 사용자는 대기 없이 즉시 서비스 이용 가능
 
 ## 문서
 
