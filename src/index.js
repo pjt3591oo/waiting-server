@@ -11,6 +11,8 @@ const redisClient = require('./config/redis');
 const routes = require('./routes');
 const errorHandler = require('./middleware/errorHandler');
 const QueueProcessor = require('./utils/queueProcessor');
+const queueService = require('./services/queueService');
+const tokenService = require('./services/tokenService');
 
 const app = express();
 const httpServer = createServer(app);
@@ -58,17 +60,63 @@ app.use('/api', routes);
 // Error handling
 app.use(errorHandler);
 
+// Socket-User mapping for disconnect handling
+const socketUserMap = new Map();
+
 // Socket.io connection handling
 io.on('connection', (socket) => {
   console.log('New client connected:', socket.id);
 
   socket.on('join-queue', (userId) => {
     socket.join(`user-${userId}`);
+    socketUserMap.set(socket.id, userId);
     console.log(`User ${userId} joined their room`);
   });
 
-  socket.on('disconnect', () => {
+  socket.on('disconnect', async () => {
     console.log('Client disconnected:', socket.id);
+    
+    const userId = socketUserMap.get(socket.id);
+    if (userId) {
+      try {
+        console.log(`Processing disconnect for user: ${userId}`);
+        
+        // Remove from queue/active status
+        const result = await queueService.removeFromQueue(userId);
+        console.log(`User ${userId} removed from queue:`, result);
+        
+        // Process queue to fill available slots
+        const processedUsers = await queueService.processQueue();
+        
+        // Notify processed users
+        for (const processedUserId of processedUsers) {
+          const accessToken = tokenService.generateAccessToken(processedUserId);
+          io.to(`user-${processedUserId}`).emit('queue-ready', {
+            status: 'active',
+            accessToken,
+            message: 'You can now access the service',
+            timestamp: new Date().toISOString()
+          });
+        }
+        
+        // Update queue positions for remaining users
+        if (processedUsers.length > 0) {
+          const queueInfo = await queueService.getQueueInfo();
+          for (const user of queueInfo.nextInQueue) {
+            io.to(`user-${user.userId}`).emit('queue-update', {
+              position: user.position,
+              estimatedWaitTime: user.estimatedWaitTime,
+              timestamp: new Date().toISOString()
+            });
+          }
+        }
+        
+        // Clean up mapping
+        socketUserMap.delete(socket.id);
+      } catch (error) {
+        console.error(`Error handling disconnect for user ${userId}:`, error);
+      }
+    }
   });
 });
 
