@@ -39,6 +39,7 @@ class QueueController {
       
       // Add to queue
       const queueData = await this.queueService.addToQueue(userId, { email, metadata });
+      console.log(queueData)
       
       // Notify via WebSocket
       const io = req.app.get('io');
@@ -56,9 +57,22 @@ class QueueController {
         });
       }
       
+      // Get updated status after processing
+      const updatedStatus = await this.queueService.getQueueStatus(userId);
+      
+      // If user is now active, add access token to response
+      let responseData = updatedStatus;
+      if (updatedStatus.status === 'active') {
+        const accessToken = this.tokenService.generateAccessToken(userId);
+        responseData = {
+          ...updatedStatus,
+          accessToken
+        };
+      }
+      
       res.status(201).json({
         success: true,
-        data: queueData
+        data: responseData
       });
     } catch (error) {
       next(error);
